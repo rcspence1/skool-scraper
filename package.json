@@ -1,0 +1,26 @@
+{
+  "name": "skool-scraper",
+  "version": "1.0.0",
+  "description": "Universal scraper for any Skool community. Extracts courses, lessons, videos, transcripts, PDFs, and community posts.",
+  "scripts": {
+    "scrape": "node scraper/index.js",
+    "scrape:courses": "node scraper/index.js --only courses",
+    "scrape:classroom": "node scraper/index.js --only classroom",
+    "scrape:about": "node scraper/index.js --only about",
+    "scrape:files": "node scraper/index.js --only files",
+    "scrape:course": "node scraper/run-one-course.js"
+  },
+  "dependencies": {
+    "playwright": "^1.59.0"
+  },
+  "keywords": [
+    "skool",
+    "scraper",
+    "course",
+    "community",
+    "playwright",
+    "transcription",
+    "whisper"
+  ],
+  "license": "MIT"
+}

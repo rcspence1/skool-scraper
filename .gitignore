@@ -1,0 +1,8 @@
+node_modules/
+output/
+*.session.json
+.DS_Store
+*.mp3
+*.mp4
+*.mp4.part
+*.ytdl
