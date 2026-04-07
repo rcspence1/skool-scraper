@@ -12,7 +12,7 @@ function getBrowserConfig() {
     userAgent: CHROME_USER_AGENT,
     viewport: { width: 1440, height: 900 },
     locale: 'en-US',
-    timezoneId: 'America/New_York',
+    timezoneId: 'Asia/Makassar',
     deviceScaleFactor: 2,
     hasTouch: false,
     javaScriptEnabled: true

@@ -392,7 +392,7 @@ async function extractLessonsFromPage(page, courseHash) {
  * Scrape a single lesson by clicking it in the sidebar.
  */
 async function scrapeLesson(page, lesson, courseSlug, lessonIndex, prog) {
-  // Set up network interception for video URLs
+  // Set up network interception for video URLs (including Skool-native MP4/HLS)
   const capturedVideos = [];
   const videoRequestHandler = (request) => {
     const url = request.url();
@@ -404,6 +404,22 @@ async function scrapeLesson(page, lesson, courseSlug, lessonIndex, prog) {
     }
     if (url.includes('loom.com')) {
       capturedVideos.push({ platform: 'loom', url });
+    }
+    // Skool-native HLS streams (Mux via video.skool.com)
+    if (url.includes('stream.video.skool.com') && url.includes('.m3u8')) {
+      const pbMatch = url.match(/stream\.video\.skool\.com\/([a-zA-Z0-9]+)\.m3u8/);
+      capturedVideos.push({
+        platform: 'mux',
+        url,
+        playbackId: pbMatch ? pbMatch[1] : null
+      });
+    }
+    // Direct MP4 downloads from Skool/cloud CDNs
+    if (url.includes('.mp4') && !url.includes('favicon') && !url.includes('.js') &&
+        !url.includes('thumbnail') && !url.includes('image.video') &&
+        (url.includes('skool.com') || url.includes('cloudfront') || url.includes('amazonaws') ||
+         url.includes('mux.com') || url.includes('cdn'))) {
+      capturedVideos.push({ platform: 'skool-native', url });
     }
   };
   page.on('request', videoRequestHandler);
@@ -464,24 +480,147 @@ async function scrapeLesson(page, lesson, courseSlug, lessonIndex, prog) {
   await page.waitForTimeout(5000);
   await checkAuth(page);
 
+  // Check __NEXT_DATA__ for video metadata on the lesson page
+  // Skool stores video data in renderData.video (Mux playback) and
+  // renderData.course.children[].children[].course.metadata (videoLink for Vimeo, videoId for Mux)
+  const nextDataVideo = await page.evaluate(() => {
+    try {
+      const script = document.querySelector('script#__NEXT_DATA__');
+      if (!script) return null;
+      const data = JSON.parse(script.textContent);
+      const pageProps = data?.props?.pageProps || {};
+
+      // Primary: renderData.video — has playbackId + playbackToken for the CURRENT lesson
+      const renderData = pageProps.renderData || {};
+      if (renderData.video && renderData.video.playbackId) {
+        return {
+          type: 'mux',
+          playbackId: renderData.video.playbackId,
+          playbackToken: renderData.video.playbackToken || null,
+          duration: renderData.video.duration || null,
+          customDomain: 'video.skool.com'
+        };
+      }
+
+      // Fallback: check current lesson's metadata for videoLink (Vimeo/YouTube/Loom)
+      // The current lesson is identified by the URL's md= parameter
+      const urlParams = new URLSearchParams(window.location.search);
+      const currentLessonId = urlParams.get('md');
+      if (currentLessonId && renderData.course?.children) {
+        for (const module of renderData.course.children) {
+          for (const lesson of (module.children || [])) {
+            const meta = lesson?.course?.metadata || {};
+            const lessonId = lesson?.course?.id;
+            if (lessonId === currentLessonId || meta.videoId || meta.videoLink) {
+              if (meta.videoLink) {
+                return { type: 'external', url: meta.videoLink };
+              }
+              if (meta.videoId) {
+                return { type: 'skool-video-id', videoId: meta.videoId };
+              }
+            }
+          }
+        }
+      }
+
+      // Legacy fallback
+      const course = pageProps.course || {};
+      const metadata = course.metadata || {};
+      if (metadata.videoUrl) return { type: 'external', url: metadata.videoUrl };
+      if (metadata.muxPlaybackId) return { type: 'mux', playbackId: metadata.muxPlaybackId };
+
+      return null;
+    } catch { return null; }
+  });
+
+  if (nextDataVideo) {
+    if (nextDataVideo.type === 'mux' && nextDataVideo.playbackId) {
+      // Construct the HLS stream URL using Skool's custom domain
+      const domain = nextDataVideo.customDomain || 'video.skool.com';
+      const tokenParam = nextDataVideo.playbackToken ? `?token=${nextDataVideo.playbackToken}` : '';
+      const streamUrl = `https://stream.${domain}/${nextDataVideo.playbackId}.m3u8${tokenParam}`;
+      capturedVideos.push({
+        platform: 'mux',
+        url: streamUrl,
+        playbackId: nextDataVideo.playbackId,
+        playbackToken: nextDataVideo.playbackToken,
+        duration: nextDataVideo.duration
+      });
+      console.log(`      🎬 Mux video found: playbackId=${nextDataVideo.playbackId.substring(0, 20)}...`);
+    } else if (nextDataVideo.type === 'external' && nextDataVideo.url) {
+      capturedVideos.push({ platform: 'skool-native', url: nextDataVideo.url });
+      console.log(`      🎬 External video found: ${nextDataVideo.url.substring(0, 80)}`);
+    }
+  }
+
   // Skool lazy-loads videos behind a PlaybackButton.
-  // Click it to trigger the Vimeo/YouTube/Loom iframe to load.
+  // Click it to trigger the Vimeo/YouTube/Loom iframe OR Skool-native video player.
+  // Click play button to trigger video loading (needed for iframe-based and Mux videos)
   const hasVideoPlayer = await page.evaluate(() => {
-    return !!document.querySelector('[class*="PlaybackButton"], [class*="VideoWrapper"], [class*="VideoPlayer"]');
+    return !!document.querySelector('[class*="PlaybackButton"], [class*="MuxThumbnail"], [class*="VideoWrapper"], [class*="VideoPlayer"], [class*="video-player"], video, [class*="MuxPlayer"], [class*="mux-player"]');
   });
 
   if (hasVideoPlayer) {
     try {
-      const playBtn = await page.$('[class*="PlaybackButton"]');
-      if (playBtn) {
-        await playBtn.click();
-      } else {
-        // Fallback: click the video wrapper
-        const wrapper = await page.$('[class*="VideoWrapper"]');
-        if (wrapper) await wrapper.click();
+      // Try multiple click targets — MuxThumbnailWrapper is what Skool-native communities use
+      const clickTargets = [
+        '[class*="PlaybackButton"]',
+        '[class*="MuxThumbnailWrapper"]',
+        '[class*="MuxThumbnail"]',
+        '[class*="VideoWrapper"]',
+        '[class*="VideoPlayer"]',
+        '[class*="video-player"]',
+        '[class*="MuxPlayer"]',
+        '[class*="mux-player"]'
+      ];
+      let clicked = false;
+      for (const sel of clickTargets) {
+        const el = await page.$(sel);
+        if (el) {
+          // Use JS click for reliability (Playwright click can timeout on overlays)
+          await page.evaluate(s => document.querySelector(s)?.click(), sel);
+          clicked = true;
+          console.log(`      ▶ Clicked: ${sel}`);
+          break;
+        }
       }
-      // Wait for the video iframe to load
-      await page.waitForTimeout(6000);
+      // Wait for the video iframe/element to load
+      await page.waitForTimeout(8000);
+
+      // After clicking, check for Mux player element with playback-id
+      const postClickVideo = await page.evaluate(() => {
+        // Check for Mux player (appears after clicking MuxThumbnailWrapper)
+        const mux = document.querySelector('mux-player');
+        if (mux) {
+          const playbackId = mux.getAttribute('playback-id') || mux.getAttribute('data-playback-id');
+          const customDomain = mux.getAttribute('custom-domain');
+          if (playbackId) {
+            return { type: 'mux', playbackId, customDomain };
+          }
+        }
+        // Fallback: check for video elements
+        const video = document.querySelector('video');
+        if (video) {
+          const src = video.getAttribute('src') || video.currentSrc;
+          if (src && !src.startsWith('blob:')) return { type: 'direct', url: src };
+        }
+        return null;
+      });
+
+      if (postClickVideo && postClickVideo.type === 'mux') {
+        // Only add if we don't already have this playback ID from __NEXT_DATA__
+        const alreadyHave = capturedVideos.some(v => v.playbackId === postClickVideo.playbackId);
+        if (!alreadyHave) {
+          const domain = postClickVideo.customDomain || 'video.skool.com';
+          capturedVideos.push({
+            platform: 'mux',
+            url: `https://stream.${domain}/${postClickVideo.playbackId}.m3u8`,
+            playbackId: postClickVideo.playbackId
+          });
+        }
+      } else if (postClickVideo && postClickVideo.type === 'direct') {
+        capturedVideos.push({ platform: 'skool-native', url: postClickVideo.url });
+      }
     } catch (e) {
       // Non-fatal — video might still be capturable from DOM
     }
@@ -537,12 +676,35 @@ async function scrapeLesson(page, lesson, courseSlug, lessonIndex, prog) {
       }
     });
 
-    // Direct video elements
+    // Direct video elements (including Skool-native uploads)
     document.querySelectorAll('video source, video').forEach(v => {
-      const src = v.getAttribute('src');
-      if (src) {
+      const src = v.getAttribute('src') || v.currentSrc;
+      if (src && !src.startsWith('blob:')) {
         data.videos.push({ platform: 'direct', videoId: null, embedUrl: src, downloadUrl: src });
         if (!data.videoUrl) data.videoUrl = src;
+      }
+    });
+
+    // Mux player (Skool uses Mux for native video hosting via video.skool.com proxy)
+    // Get playback token from __NEXT_DATA__ for authenticated stream access
+    let muxPlaybackToken = null;
+    try {
+      const ndScript = document.querySelector('script#__NEXT_DATA__');
+      if (ndScript) {
+        const nd = JSON.parse(ndScript.textContent);
+        const rv = nd?.props?.pageProps?.renderData?.video;
+        if (rv?.playbackToken) muxPlaybackToken = rv.playbackToken;
+      }
+    } catch {}
+
+    document.querySelectorAll('mux-player, [class*="MuxPlayer"], [class*="mux-player"]').forEach(mux => {
+      const playbackId = mux.getAttribute('playback-id') || mux.getAttribute('data-playback-id');
+      const customDomain = mux.getAttribute('custom-domain') || 'video.skool.com';
+      if (playbackId) {
+        const tokenParam = muxPlaybackToken ? `?token=${muxPlaybackToken}` : '';
+        const streamUrl = `https://stream.${customDomain}/${playbackId}.m3u8${tokenParam}`;
+        data.videos.push({ platform: 'mux', videoId: playbackId, playbackId, embedUrl: streamUrl, downloadUrl: streamUrl });
+        if (!data.videoUrl) data.videoUrl = streamUrl;
       }
     });
 
@@ -627,28 +789,55 @@ async function scrapeLesson(page, lesson, courseSlug, lessonIndex, prog) {
   // Remove network listener
   page.removeListener('request', videoRequestHandler);
 
-  // Merge network-intercepted videos
+  // Merge network-intercepted videos (Vimeo, YouTube, Loom, Skool-native, Mux)
   if (capturedVideos.length > 0) {
+    const existingUrls = new Set(lessonData.videos.map(v => v.downloadUrl || v.embedUrl).filter(Boolean));
     const existingIds = new Set(lessonData.videos.map(v => v.videoId).filter(Boolean));
     for (const netVideo of capturedVideos) {
       let videoId = null;
+      let downloadUrl = netVideo.url;
       if (netVideo.platform === 'vimeo') {
         const match = netVideo.url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
-        if (match) videoId = match[1];
+        if (match) { videoId = match[1]; downloadUrl = `https://player.vimeo.com/video/${videoId}`; }
       } else if (netVideo.platform === 'youtube') {
         const match = netVideo.url.match(/(?:embed\/|watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-        if (match) videoId = match[1];
+        if (match) { videoId = match[1]; downloadUrl = `https://www.youtube.com/watch?v=${videoId}`; }
+      } else if (netVideo.platform === 'mux') {
+        videoId = netVideo.playbackId || null;
+        downloadUrl = netVideo.url; // Full HLS URL with token
+      } else if (netVideo.platform === 'skool-native') {
+        // Extract a usable ID from URL for dedup
+        const muxMatch = netVideo.url.match(/stream\.(?:mux\.com|video\.skool\.com)\/([a-zA-Z0-9]+)/);
+        if (muxMatch) { videoId = muxMatch[1]; downloadUrl = netVideo.url; }
+        else videoId = netVideo.url.split('/').pop().split('?')[0].split('.')[0];
       }
-      if (videoId && !existingIds.has(videoId)) {
-        existingIds.add(videoId);
-        lessonData.videos.push({
-          platform: netVideo.platform, videoId,
-          embedUrl: netVideo.url,
-          downloadUrl: netVideo.platform === 'vimeo' ? `https://player.vimeo.com/video/${videoId}` :
-                       netVideo.platform === 'youtube' ? `https://www.youtube.com/watch?v=${videoId}` : netVideo.url,
-          source: 'network-intercept'
-        });
+
+      // Deduplicate — but upgrade tokenless URLs with tokenful ones
+      if (existingUrls.has(netVideo.url) || existingUrls.has(downloadUrl)) continue;
+      if (videoId && existingIds.has(videoId)) {
+        // If existing entry has no token but new one does, upgrade it
+        if (netVideo.platform === 'mux' && downloadUrl.includes('token=')) {
+          const existing = lessonData.videos.find(v => v.videoId === videoId || v.playbackId === videoId);
+          if (existing && !existing.downloadUrl?.includes('token=')) {
+            existing.downloadUrl = downloadUrl;
+            existing.embedUrl = netVideo.url;
+            existing.playbackToken = netVideo.playbackToken;
+          }
+        }
+        continue;
       }
+
+      if (videoId) existingIds.add(videoId);
+      existingUrls.add(downloadUrl);
+
+      lessonData.videos.push({
+        platform: netVideo.platform, videoId,
+        playbackId: netVideo.playbackId || videoId,
+        playbackToken: netVideo.playbackToken || null,
+        embedUrl: netVideo.url,
+        downloadUrl,
+        source: 'network-intercept'
+      });
     }
   }
 
@@ -793,7 +982,8 @@ function downloadAndTranscribe(video, courseSlug, lessonFilename) {
   const mediaDir = path.join(config.outputDir, 'courses', courseSlug, 'media');
   if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
 
-  const basename = `${lessonFilename}-${video.platform}-${video.videoId}`;
+  const videoIdentifier = video.videoId || video.playbackId || 'unknown';
+  const basename = `${lessonFilename}-${video.platform}-${videoIdentifier}`;
   const audioFile = path.join(mediaDir, `${basename}.mp3`);
   const transcriptFile = path.join(mediaDir, `${basename}-transcript.txt`);
 
@@ -807,11 +997,48 @@ function downloadAndTranscribe(video, courseSlug, lessonFilename) {
   const tempAudio = path.join(mediaDir, `${basename}-raw.mp4`);
   if (!fs.existsSync(tempAudio) && !fs.existsSync(audioFile)) {
     const dlUrl = video.downloadUrl || `https://player.vimeo.com/video/${video.videoId}`;
-    execSync(
-      `yt-dlp --impersonate chrome --referer "https://www.skool.com/" ` +
-      `-f "bestaudio" -o "${tempAudio}" "${dlUrl}"`,
-      { stdio: 'pipe', timeout: 300000 }
-    );
+
+    if (video.platform === 'mux') {
+      // Mux uses HLS (.m3u8) — yt-dlp handles this natively
+      // The stream URL includes a signed token from Skool's __NEXT_DATA__
+      try {
+        execSync(
+          `yt-dlp --no-check-certificates --referer "https://www.skool.com/" ` +
+          `-f "bestaudio" -o "${tempAudio}" "${dlUrl}"`,
+          { stdio: 'pipe', timeout: 300000 }
+        );
+      } catch (e) {
+        // Fallback: try with ffmpeg directly for HLS streams
+        try {
+          execSync(
+            `ffmpeg -y -i "${dlUrl}" -vn -acodec libmp3lame -q:a 4 "${audioFile}"`,
+            { stdio: 'pipe', timeout: 300000 }
+          );
+        } catch (e2) {
+          console.log(`      ⚠ Mux download failed: ${e2.message?.substring(0, 100)}`);
+        }
+      }
+    } else if (video.platform === 'skool-native' || video.platform === 'direct') {
+      // Direct MP4 downloads
+      try {
+        execSync(
+          `curl -L -o "${tempAudio}" "${dlUrl}"`,
+          { stdio: 'pipe', timeout: 300000 }
+        );
+      } catch (e) {
+        execSync(
+          `yt-dlp --impersonate chrome --referer "https://www.skool.com/" ` +
+          `-f "bestaudio" -o "${tempAudio}" "${dlUrl}"`,
+          { stdio: 'pipe', timeout: 300000 }
+        );
+      }
+    } else {
+      execSync(
+        `yt-dlp --impersonate chrome --referer "https://www.skool.com/" ` +
+        `-f "bestaudio" -o "${tempAudio}" "${dlUrl}"`,
+        { stdio: 'pipe', timeout: 300000 }
+      );
+    }
   }
 
   // Convert to mp3

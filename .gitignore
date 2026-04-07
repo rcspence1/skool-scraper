@@ -1,6 +1,8 @@
 node_modules/
 output/
+output-*/
 *.session.json
+.session.json
 .DS_Store
 *.mp3
 *.mp4

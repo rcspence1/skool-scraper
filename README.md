@@ -10,7 +10,7 @@ Extracts courses, lessons, video transcripts, PDFs, Google Docs/Sheets, file att
 
 - **Course structure** -- modules and lessons in order
 - **Lesson text content** -- full lesson body text
-- **Video URLs** -- Vimeo, YouTube, and Loom detection via iframes + network interception
+- **Video URLs** -- Skool-native (Mux), Vimeo, YouTube, and Loom detection via `__NEXT_DATA__`, iframes, and network interception
 - **Audio download + transcription** -- downloads audio-only via yt-dlp, transcribes locally with Whisper
 - **PDF/file attachments** -- Skool-hosted files downloaded via authenticated API
 - **Google Sheets** -- exported as CSV
@@ -67,7 +67,7 @@ pip3 install openai-whisper
 1. **Clone the repo**
 
    ```bash
-   git clone https://github.com/YOUR-USERNAME/skool-scraper.git
+   git clone https://github.com/rcspence1/skool-scraper.git
    cd skool-scraper
    ```
 
@@ -101,7 +101,7 @@ pip3 install openai-whisper
 
 7. **Wait** -- The scraper navigates through every course, lesson, and post automatically. Progress is shown in the terminal.
 
-8. **Output** -- Everything is saved to the `output/` directory.
+8. **Output** -- Everything is saved to `output-{community-name}/` (e.g., `output-mattryder/`).
 
 ---
 
@@ -151,7 +151,7 @@ node scraper/run-one-course.js course-slug-here
 ## Output Structure
 
 ```
-output/
+output-{community-name}/
 ├── courses/
 │   └── course-name/
 │       ├── course.json              # Course metadata + lesson list
@@ -194,7 +194,14 @@ Reads the full course tree from `__NEXT_DATA__` at `pageProps.course.children` (
 
 ### Video Capture
 
-Clicks Skool's `PlaybackButton` to trigger lazy-loaded video iframes. Detects Vimeo, YouTube, and Loom via iframe `src` attributes plus network request interception (catches requests to `player.vimeo.com`, `youtube.com/embed`, `loom.com`). Also scans lesson text content for video links. Downloads audio-only via yt-dlp to save disk space.
+Supports all video hosting platforms used by Skool communities:
+
+- **Skool-native (Mux)** -- Extracts `playbackId` and signed `playbackToken` from `__NEXT_DATA__` (`renderData.video`). Clicks `MuxThumbnailWrapper` to trigger the `<mux-player>` element. Downloads audio via HLS stream URL (`stream.video.skool.com/{playbackId}.m3u8?token={jwt}`).
+- **Vimeo** -- Clicks `PlaybackButton` to trigger lazy-loaded iframes. Detects via iframe `src` and network interception.
+- **YouTube** -- Same iframe + network detection as Vimeo.
+- **Loom** -- Detected from iframes, network requests, and lesson resource metadata.
+
+Also scans lesson text content for embedded video links. Downloads audio-only via yt-dlp (or ffmpeg for HLS streams) to save disk space.
 
 ### Transcription
 
@@ -236,8 +243,10 @@ Technical reference for developers who want to understand or extend the scraper.
 - Signed file URLs: `files.skool.com/f/{hash}/{hash}?Expires=...&Signature=...`
 
 **DOM patterns:**
-- Videos lazy-loaded behind `PlaybackButton` -- must click to trigger iframe injection
-- Styled-components class patterns: `CourseModuleWrapper`, `MenuItemTitle`, `VideoWrapper`, `MainContent`, `ResourceWrapper`, `ResourceLabel`, `CourseLinkWrapper`, `CourseTitle`
+- Vimeo/YouTube/Loom videos lazy-loaded behind `PlaybackButton` -- must click to trigger iframe injection
+- Skool-native (Mux) videos behind `MuxThumbnailWrapper` -- click triggers `<mux-player>` element with `playback-id` attribute
+- `custom-domain="video.skool.com"` on `<mux-player>` -- Skool proxies Mux through their own CDN
+- Styled-components class patterns: `CourseModuleWrapper`, `MenuItemTitle`, `VideoWrapper`, `MainContent`, `ResourceWrapper`, `ResourceLabel`, `CourseLinkWrapper`, `CourseTitle`, `MuxThumbnailWrapper`, `MuxPlayerWrapper`
 - Client-side navigation (React) doesn't update `__NEXT_DATA__` -- a full page reload is needed after clicking into a course to get fresh server-rendered data
 
 ---
@@ -257,7 +266,7 @@ The scraper auto-detects this when the URL redirects to `/login`. It pauses and 
 The scraper auto-pauses for 30 seconds when it receives a 429 or 403 response. If rate limiting persists, increase the `delays.min` and `delays.max` values in config.js (e.g., `min: 4000, max: 8000`).
 
 **Videos not captured**
-Make sure the video actually plays when you click it manually in a normal browser. Some lessons use external embeds or custom players that may need different handling. The scraper captures Vimeo, YouTube, and Loom. Other platforms would need custom support.
+Make sure the video actually plays when you click it manually in a normal browser. The scraper supports Skool-native videos (Mux), Vimeo, YouTube, and Loom. For Skool-native videos, the `playbackId` and signed token are extracted from `__NEXT_DATA__` -- if the token has expired (session too old), re-login and re-run.
 
 **PDFs not downloading**
 Skool-hosted files require authentication. The scraper uses your session cookies automatically. External links (Google Docs/Sheets) may require you to be logged into Google in the same browser profile. If a Google Doc is private/restricted, the export will fail.

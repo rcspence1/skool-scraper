@@ -2,17 +2,21 @@ const path = require('path');
 
 module.exports = {
   // UPDATE THIS with your Skool community URL
-  communityUrl: 'https://www.skool.com/your-community-here',
+  communityUrl: 'https://www.skool.com/YOUR-COMMUNITY-HERE',
 
   // Derived paths
   get communitySlug() {
     return this.communityUrl.split('/').pop();
   },
 
-  // Output
-  outputDir: path.join(__dirname, '..', 'output'),
-  sessionFile: path.join(__dirname, '..', 'output', '.session.json'),
-  progressFile: path.join(__dirname, '..', 'output', 'progress.json'),
+  // Output — automatically uses community name as folder
+  get outputDir() {
+    return path.join(__dirname, '..', `output-${this.communitySlug}`);
+  },
+  sessionFile: path.join(__dirname, '..', '.session.json'),
+  get progressFile() {
+    return path.join(this.outputDir, 'progress.json');
+  },
 
   // Video + Transcription
   // Set transcribe to false to only capture video URLs without downloading
