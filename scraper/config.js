@@ -1,8 +1,20 @@
+const fs = require('fs');
 const path = require('path');
 
+// The community is normally chosen by `npm start` (it asks, then remembers it in
+// .community-url). You can also hard-code it on the communityUrl line below.
+function savedCommunityUrl() {
+  if (process.env.SKOOL_COMMUNITY_URL) return process.env.SKOOL_COMMUNITY_URL;
+  try {
+    const saved = fs.readFileSync(path.join(__dirname, '..', '.community-url'), 'utf-8').trim();
+    if (saved) return saved;
+  } catch {}
+  return null;
+}
+
 module.exports = {
-  // UPDATE THIS with your Skool community URL
-  communityUrl: 'https://www.skool.com/YOUR-COMMUNITY-HERE',
+  // Your Skool community URL (set automatically by `npm start`)
+  communityUrl: savedCommunityUrl() || 'https://www.skool.com/YOUR-COMMUNITY-HERE',
 
   // Derived paths
   get communitySlug() {
@@ -20,7 +32,8 @@ module.exports = {
 
   // Video + Transcription
   // Set transcribe to false to only capture video URLs without downloading
-  transcribe: true,      // download audio + Whisper transcribe during scrape
+  // (`npm start` switches this off automatically if yt-dlp, ffmpeg or Whisper is missing)
+  transcribe: !process.env.SKOOL_NO_TRANSCRIBE,  // download audio + Whisper transcribe during scrape
   whisperModel: 'base',  // tiny | base | small | medium | large
 
   // Rate limiting (milliseconds)

@@ -77,29 +77,25 @@ pip3 install openai-whisper
    npm install
    ```
 
-3. **Install Chromium for Playwright**
+3. **Chromium** installs automatically as part of `npm install`. If the browser fails to open later, run:
 
    ```bash
    npx playwright install chromium
    ```
 
-4. **Set your target community**
-
-   Edit `scraper/config.js` and change the `communityUrl`:
-
-   ```js
-   communityUrl: 'https://www.skool.com/your-community-here',
-   ```
-
-5. **Run the scraper**
+4. **Run it**
 
    ```bash
-   npm run scrape
+   npm start
    ```
+
+   It asks for your Skool community link the first time, then remembers it. (Or pass it directly: `npm start -- https://www.skool.com/your-community`.)
+
+5. **Transcripts are optional** -- if yt-dlp, ffmpeg or Whisper is not installed, the scraper says so, switches transcription off, and still scrapes everything else.
 
 6. **Log in** -- A Chrome browser window opens. Log in to your Skool account. The scraper detects login automatically (no need to press Enter or do anything else).
 
-7. **Wait** -- The scraper navigates through every course, lesson, and post automatically. Progress is shown in the terminal.
+7. **Wait** -- The scraper works through every course and lesson automatically. Progress is shown in the terminal.
 
 8. **Output** -- Everything is saved to `output-{community-name}/` (e.g., `output-mattryder/`).
 
@@ -111,8 +107,8 @@ All settings are in `scraper/config.js`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `communityUrl` | `'https://www.skool.com/your-community-here'` | The Skool community to scrape. Change this to your target. |
-| `transcribe` | `true` | Set to `false` to skip video download and transcription (only captures URLs). |
+| `communityUrl` | set by `npm start` | The Skool community to scrape. `npm start` asks for it and remembers it; you can also hard-code it here. |
+| `transcribe` | `true` | Set to `false` to skip video download and transcription (only captures URLs). Switched off automatically if yt-dlp, ffmpeg or Whisper is missing. |
 | `whisperModel` | `'base'` | Whisper model size: `tiny` (fastest, least accurate), `base` (good balance), `small`, `medium`, `large` (slowest, most accurate). |
 | `delays.min` | `2000` | Minimum delay between page loads (ms). |
 | `delays.max` | `4000` | Maximum delay between page loads (ms). |
@@ -125,13 +121,16 @@ All settings are in `scraper/config.js`:
 ## Commands
 
 ```bash
-# Full scrape -- all courses, posts, about page, and files
-npm run scrape
+# Full scrape -- all courses, lessons, transcripts, files, and the about page
+npm start
+
+# Scrape a different community
+npm start -- https://www.skool.com/another-community
 
 # Only courses and lessons
 npm run scrape:courses
 
-# Only community posts
+# Community posts (experimental -- not part of the full scrape)
 npm run scrape:classroom
 
 # Only the about page

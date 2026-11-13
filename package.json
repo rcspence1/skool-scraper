@@ -1,14 +1,16 @@
 {
-  "name": "sales-os",
+  "name": "skool-scraper",
   "version": "1.0.0",
-  "description": "Skool community scraper + Matthew Ryder Sales Brain knowledge base",
+  "description": "Scrape any Skool community you are a member of: courses, lessons, transcripts, files, posts",
   "scripts": {
-    "scrape": "node scraper/index.js",
-    "scrape:courses": "node scraper/index.js --only courses",
-    "scrape:classroom": "node scraper/index.js --only classroom",
-    "scrape:about": "node scraper/index.js --only about",
-    "scrape:files": "node scraper/index.js --only files",
-    "build-kb": "node knowledge-base/build.js"
+    "postinstall": "playwright install chromium || echo Browser download failed. Run: npx playwright install chromium",
+    "start": "node scraper/start.js",
+    "scrape": "node scraper/start.js",
+    "scrape:courses": "node scraper/start.js --only courses",
+    "scrape:classroom": "node scraper/start.js --only classroom",
+    "scrape:about": "node scraper/start.js --only about",
+    "scrape:files": "node scraper/start.js --only files",
+    "scrape:course": "node scraper/run-one-course.js"
   },
   "dependencies": {
     "playwright": "^1.59.0"

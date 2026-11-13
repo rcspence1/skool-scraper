@@ -36,22 +36,49 @@ async function main() {
 
     logger.info(`Scrape started. Only: ${only || 'all'}`);
 
-    // Run scrapers in order — CLASSROOM (courses) is priority
-    // Community posts are secondary and can be added later
+    // Friendly warning if this login is not a member of the community (otherwise
+    // the run just finds 0 courses with no explanation). Never blocks the scrape.
+    try {
+      const groups = await page.evaluate(() => {
+        const el = document.getElementById('__NEXT_DATA__');
+        const self = el && JSON.parse(el.textContent).props.pageProps.self;
+        return self && Array.isArray(self.allGroups) ? self.allGroups.map(g => g.name) : null;
+      });
+      if (groups && !groups.includes(config.communitySlug)) {
+        console.log(`\n  ⚠ This Skool login does not look like a member of "${config.communitySlug}".`);
+        console.log('    Members-only content (courses, files) will come back empty.');
+        if (groups.length > 0) {
+          console.log('    Communities this login is in:');
+          groups.forEach(g => console.log(`      https://www.skool.com/${g}`));
+          console.log('    To scrape one of those:  npm start -- <link>');
+        }
+        logger.warn(`Login is not a member of ${config.communitySlug}`);
+      }
+    } catch (e) {}
+
+    // Run scrapers in order. Courses then files run first, exactly as they always have.
     if (!only || only === 'courses') {
       await scrapeCourses(page, prog);
     }
 
-    if (only === 'about') {
-      await scrapeAbout(page, prog);
-    }
-
-    if (only === 'classroom') {
-      await scrapeClassroom(page, prog);
-    }
-
     if (!only || only === 'files') {
       await scrapeFiles(page, prog);
+    }
+
+    // About page is part of a full run. A failure here never affects what is already saved.
+    if (!only || only === 'about') {
+      try {
+        await scrapeAbout(page, prog);
+      } catch (e) {
+        if (only) throw e;
+        logger.error('About page failed', e.message);
+        console.log(`\n  ⚠ About page failed (${e.message}) — carrying on.`);
+      }
+    }
+
+    // Community posts are opt-in only (npm run scrape:classroom) — not yet proven reliable.
+    if (only === 'classroom') {
+      await scrapeClassroom(page, prog);
     }
 
     // Summary
@@ -62,6 +89,7 @@ async function main() {
     console.log(`  Posts: ${prog.posts.scraped}/${prog.posts.totalFound}`);
     console.log(`  About: ${prog.about}`);
     console.log(`  Files: ${prog.files.downloaded}/${prog.files.totalFound}`);
+    console.log(`  Saved to: ${config.outputDir}`);
     console.log(`  Log: ${config.outputDir}/scrape-log.txt`);
     console.log('═'.repeat(55) + '\n');
 

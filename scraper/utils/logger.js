@@ -73,6 +73,7 @@ function info(message) {
  */
 function init() {
   const header = `\n${'='.repeat(60)}\nSCRAPE SESSION: ${new Date().toISOString()}\nCommunity: ${config.communityUrl}\n${'='.repeat(60)}\n\n`;
+  fs.mkdirSync(path.dirname(logFile), { recursive: true }); // first run: output folder does not exist yet
   fs.appendFileSync(logFile, header);
 }
 
